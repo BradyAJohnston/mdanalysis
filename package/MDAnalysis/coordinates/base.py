@@ -1497,7 +1497,7 @@ class ReaderBase(ProtoReader):
 
         self._ts_kwargs = ts_kwargs
 
-    def copy(self):
+    def copy(self, transformations: bool = True) -> 'ReaderBase':
         """Return independent copy of this Reader.
 
         New Reader will have its own file handle and can seek/iterate
@@ -1505,6 +1505,12 @@ class ReaderBase(ProtoReader):
 
         Will also copy the current state of the Timestep held in the original
         Reader.
+        
+        Parameters
+        ----------
+        transformations : bool, optional
+            If ``True``, any transformations added to the original Reader
+            will also be added to the new copy. Default is ``True``.
 
 
         .. versionchanged:: 2.2.0
@@ -1512,11 +1518,14 @@ class ReaderBase(ProtoReader):
            passed to the creation of the new class. Previously the only
            ``n_atoms`` was passed to class copies, leading to a class created
            with default parameters which may differ from the original class.
+        .. versionchanged:: 2.11.0
+           Added *transformations* argument to optionally not copy over any
+           transformations added to the original Reader.
         """
 
         new = self.__class__(**self._kwargs)
 
-        if self.transformations:
+        if self.transformations and transformations:
             new.add_transformations(*self.transformations)
         # seek the new reader to the same frame we started with
         new[self.ts.frame]

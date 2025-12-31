@@ -652,13 +652,26 @@ class Universe(object):
             context, to_guess, force_guess, error_if_missing=False
         )
 
-    def copy(self):
-        """Return an independent copy of this Universe"""
+    def copy(self, transformations=True) -> "Universe":
+        """
+        Return an independent copy of this Universe
+
+        Parameters
+        ----------
+        transformations : bool, optional
+            If ``True``, any transformations added to the original not in-memory
+            coordinates will also be added to the new copy. Default is ``True``.
+
+        .. versionmodified:: 2.11.0
+            Added `transformations` parameter to control whether transformations
+            are copied to the new Universe.
+
+        """
         context = self._context.copy()
         new = self.__class__(
             self._topology.copy(), to_guess=(), context=context
         )
-        new.trajectory = self.trajectory.copy()
+        new.trajectory = self.trajectory.copy(transformations=transformations)
         return new
 
     @classmethod
