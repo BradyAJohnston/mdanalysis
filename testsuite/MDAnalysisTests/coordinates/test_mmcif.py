@@ -1,4 +1,5 @@
 import glob
+import shutil
 from pathlib import Path
 
 import MDAnalysis as mda
@@ -125,3 +126,69 @@ def test_cryst1_record_placeholder():
             ).ts.dimensions
             is None
         )
+
+
+@pytest.fixture
+def two_model_structure():
+    gemmi = pytest.importorskip("gemmi")
+    structure = gemmi.read_structure(f"{MMCIF_FOLDER}/1YJP.cif")
+    # the copied model keeps the original's number, which must not matter
+    structure.add_model(structure[0])
+    for chain in structure[1]:
+        for residue in chain:
+            for atom in residue:
+                atom.pos = gemmi.Position(
+                    atom.pos.x + 1, atom.pos.y, atom.pos.z
+                )
+    return structure
+
+
+@pytest.mark.skipif(not HAS_GEMMI, reason="gemmi not installed")
+@pytest.mark.filterwarnings("ignore::UserWarning")
+def test_models_as_frames(two_model_structure):
+    u = mda.Universe(two_model_structure)
+    assert u.trajectory.n_frames == 2
+    first = u.trajectory[0].positions.copy()
+    second = u.trajectory[1].positions
+    assert np.allclose(second - first, [1, 0, 0], atol=1e-4)
+    # the caller's structure is left as it was
+    assert len(two_model_structure) == 2
+
+
+@pytest.mark.skipif(not HAS_GEMMI, reason="gemmi not installed")
+@pytest.mark.filterwarnings("ignore::UserWarning")
+def test_universe_from_gemmi_structure():
+    import gemmi
+
+    path = f"{MMCIF_FOLDER}/1YJP.cif"
+    u_file = mda.Universe(path)
+    u_obj = mda.Universe(gemmi.read_structure(path))
+    assert np.array_equal(u_obj.atoms.names, u_file.atoms.names)
+    assert np.array_equal(u_obj.atoms.positions, u_file.atoms.positions)
+
+
+@pytest.mark.skipif(not HAS_GEMMI, reason="gemmi not installed")
+@pytest.mark.filterwarnings("ignore::UserWarning")
+def test_parsed_once_per_universe(monkeypatch):
+    MMCIF = mda.coordinates.MMCIF
+    monkeypatch.setattr(MMCIF, "_last_parse", (None, None))
+    calls = []
+    read = MMCIF._read_gemmi_structure
+
+    def counting_read(filename):
+        calls.append(filename)
+        return read(filename)
+
+    monkeypatch.setattr(MMCIF, "_read_gemmi_structure", counting_read)
+    mda.Universe(f"{MMCIF_FOLDER}/1YJP.cif")
+    assert len(calls) == 1
+
+
+@pytest.mark.skipif(not HAS_GEMMI, reason="gemmi not installed")
+@pytest.mark.filterwarnings("ignore::UserWarning")
+def test_parse_cache_sees_changed_file(tmp_path):
+    path = tmp_path / "structure.cif.gz"
+    shutil.copy(f"{MMCIF_FOLDER}/1YJP.cif.gz", path)
+    assert mda.Universe(path).atoms.n_atoms == 66
+    shutil.copy(f"{MMCIF_FOLDER}/7ETN.cif.gz", path)
+    assert mda.Universe(path).atoms.n_atoms == 150

@@ -267,8 +267,8 @@ also recognized when they are compressed with :program:`gzip` or
    | DL_Poly [#a]_ | history   |  r    | DL_Poly ascii history file                           |
    |               |           |       | :mod:`MDAnalysis.coordinates.DLPOLY`                 |
    +---------------+-----------+-------+------------------------------------------------------+
-   | MMCIF [#a]_   | cif,      |  r    | Single frame of coordinates from macromolecular      |
-   |               | mmcif     |       | structures in the PDBx/mmCIF format (requires the    |
+   | MMCIF [#a]_   | cif,      |  r    | Coordinates from macromolecular structures in the    |
+   |               | mmcif     |       | PDBx/mmCIF format, one frame per model (requires the |
    |               |           |       | gemmi_ package).                                     |
    |               |           |       | :mod:`MDAnalysis.coordinates.MMCIF`                  |
    +---------------+-----------+-------+------------------------------------------------------+

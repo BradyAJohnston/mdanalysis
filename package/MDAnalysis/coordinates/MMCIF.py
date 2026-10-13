@@ -14,9 +14,10 @@ more modern and flexible alternative to the PDB format, capable of storing
 detailed structural and experimental data about biological macromolecules.
 
 MMCIF files use a structured, tabular format with key-value pairs to store
-both coordinate and atom information. The format supports multiple
-models/frames, though this implementation currently only reads the first
-model and provides warning messages for multi-model files.
+both coordinate and atom information. Each model of a multi-model file
+(e.g. an NMR ensemble) is read as one frame, with the topology taken from the
+first model. If the models have different numbers of atoms, only the first
+model is read and a warning is issued.
 
 The reader automatically detects if the structure contains placeholder unit
 cell information (usually the case for cryoEM structures, where cell
@@ -35,6 +36,11 @@ Basic usage
     # or from a compressed file
     u = mda.Universe("structure.cif.gz")
 
+    # or from a structure already read with gemmi
+    import gemmi
+
+    u = mda.Universe(gemmi.read_structure("structure.cif"))
+
 See Also
 --------
 * `wwPDB MMCIF Resources <http://mmcif.wwpdb.org>`_
@@ -50,17 +56,19 @@ Classes
 """
 
 import logging
+import os
 import warnings
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
 
 from ..lib import util
+from ..lib.util import store_init_arguments
 from . import base
 
 if TYPE_CHECKING:
-    from gemmi import Structure
+    from gemmi import FlatStructure, Structure
 
 try:
     import gemmi
@@ -113,31 +121,84 @@ def _read_gemmi_structure(filename: str | Path) -> "Structure":
             raise e
 
 
-def _get_coordinates(structure: "Structure") -> np.ndarray:
-    """Get coordinates of all atoms in a single-model `gemmi.Structure`.
+class _ParsedMMCIF(NamedTuple):
+    """Everything the parser and reader need from one gemmi parse"""
 
-    Parameters
-    ----------
-    structure
-        input ``gemmi.Structure`` holding only one model; ``gemmi.FlatStructure``
-        includes atoms from every model, so extra models must be removed first
-
-    Returns
-    -------
-        np.ndarray, shape [n, 3], where ``n`` is the number of atoms in the structure.
-    """
-    return np.asarray(gemmi.FlatStructure(structure).pos)
+    #: atom table of every model, models in file order, strings as bytes
+    flat: "FlatStructure"
+    #: number of atoms in the first model (its rows come first in `flat`)
+    n_atoms: int
+    n_models: int
+    #: whether every model has `n_atoms` atoms, so models can be frames
+    same_size: bool
+    #: unit cell as [a, b, c, alpha, beta, gamma]
+    cell: np.ndarray
 
 
-class MMCIFReader(base.SingleFrameReaderBase):
+# The most recent (file key, parse) pair. A Universe built from a file runs
+# MMCIFParser and then MMCIFReader on it, and this lets both share one parse.
+_last_parse = (None, None)
+
+
+def _is_gemmi_structure(thing) -> bool:
+    return HAS_GEMMI and isinstance(thing, gemmi.Structure)
+
+
+def _file_key(filename) -> tuple | None:
+    """Identify an on-disk file by its path, modification time and size;
+    ``None`` for streams and gemmi objects, which are never cached"""
+    if util.isstream(filename) or not isinstance(filename, (str, os.PathLike)):
+        return None
+    stat = os.stat(filename)
+    return os.path.realpath(filename), stat.st_mtime_ns, stat.st_size
+
+
+def _parse_mmcif(filename) -> _ParsedMMCIF:
+    """Parse a file, stream or ``gemmi.Structure`` into a `_ParsedMMCIF`,
+    reusing the previous result if it was for the same, unchanged file"""
+    global _last_parse
+    key = _file_key(filename)
+    if key is not None and _last_parse[0] == key:
+        return _last_parse[1]
+
+    if _is_gemmi_structure(filename):
+        structure = filename
+    else:
+        structure = _read_gemmi_structure(filename)
+    flat = gemmi.FlatStructure(structure)
+    flat.strings_as_numbers = False
+
+    sizes = [model.count_atom_sites() for model in structure]
+    parsed = _ParsedMMCIF(
+        flat=flat,
+        n_atoms=sizes[0] if sizes else 0,
+        n_models=len(sizes),
+        same_size=len(set(sizes)) == 1,
+        cell=np.array(
+            [
+                getattr(structure.cell, name)
+                for name in ("a", "b", "c", "alpha", "beta", "gamma")
+            ]
+        ),
+    )
+    if key is not None:
+        _last_parse = (key, parsed)
+    return parsed
+
+
+class MMCIFReader(base.ReaderBase):
     """Reads from an MMCIF file using :mod:`gemmi` as a backend.
+
+    The *filename* argument accepts a file path, a compressed ``.cif.gz`` file,
+    a stream/file-like object, or a ``gemmi.Structure``.
 
     Notes
     -----
 
-    If the structure represents an ensemble, only the first structure in the ensemble
-    is read here (and a warning is thrown). Also, if the structure has a placeholder "CRYST1"
-    record (1, 1, 1, 90, 90, 90), it's set to ``None`` instead.
+    Each model of the structure is read as one frame. If the models have
+    different numbers of atoms, only the first model is read (and a warning is
+    thrown). Also, if the structure has a placeholder "CRYST1" record
+    (1, 1, 1, 90, 90, 90), it's set to ``None`` instead.
 
     .. versionadded:: 2.11.0
     """
@@ -145,33 +206,34 @@ class MMCIFReader(base.SingleFrameReaderBase):
     format = ["cif", "cif.gz", "mmcif", "mmcif.gz"]
     units = {"time": None, "length": "Angstrom"}
 
-    def __init__(self, filename, **kwargs):
+    @store_init_arguments
+    def __init__(self, filename, convert_units=True, **kwargs):
+        # initialise the base first, so that its __del__ works if we raise
+        super(MMCIFReader, self).__init__(
+            filename, convert_units=convert_units, **kwargs
+        )
         if not HAS_GEMMI:
             errmsg = "MMCIFReader: To read mmCIF files, please install gemmi"
             raise ImportError(errmsg)
-        super(MMCIFReader, self).__init__(filename, **kwargs)
+        parsed = _parse_mmcif(filename)
+        if parsed.same_size:
+            self.n_frames = parsed.n_models
+        else:
+            self.n_frames = 1
+            if parsed.n_models > 1:
+                wmsg = (
+                    f"File {self.filename} has {parsed.n_models} "
+                    "differently-sized models, but only the first one will "
+                    "be read"
+                )
+                warnings.warn(wmsg)
+                logger.warning(wmsg)
+        self.n_atoms = parsed.n_atoms
+        self._positions = np.asarray(parsed.flat.pos, dtype=np.float32)[
+            : self.n_frames * self.n_atoms
+        ].reshape(self.n_frames, self.n_atoms, 3)
 
-    def _read_first_frame(self):
-        structure = self._get_structure()
-        cell_dims = np.array(
-            [
-                getattr(structure.cell, name)
-                for name in ("a", "b", "c", "alpha", "beta", "gamma")
-            ]
-        )
-        if len(structure) > 1:
-            wmsg = (
-                f"File {self.filename} has {len(structure)} models, "
-                "but only the first one will be read"
-            )
-            warnings.warn(wmsg)
-            logger.warning(wmsg)
-            del structure[1:]
-
-        coords = _get_coordinates(structure)
-        self.n_atoms = len(coords)
-        self.ts = self._Timestep.from_coordinates(coords, **self._ts_kwargs)
-        if np.allclose(cell_dims, np.array([1.0, 1.0, 1.0, 90.0, 90.0, 90.0])):
+        if np.allclose(parsed.cell, [1.0, 1.0, 1.0, 90.0, 90.0, 90.0]):
             wmsg = (
                 "1 A^3 CRYST1 record,"
                 " this is usually a placeholder."
@@ -179,10 +241,32 @@ class MMCIFReader(base.SingleFrameReaderBase):
             )
             warnings.warn(wmsg)
             logger.warning(wmsg)
-            self.ts.dimensions = None
+            self._dimensions = None
         else:
-            self.ts.dimensions = cell_dims
-        self.ts.frame = 0
+            self._dimensions = parsed.cell
 
-    def _get_structure(self):
-        return _read_gemmi_structure(self.filename)
+        self.ts = self._Timestep(self.n_atoms, **self._ts_kwargs)
+        self._read_frame(0)
+
+    @staticmethod
+    def _format_hint(thing):
+        """Can this Reader read *thing*?"""
+        return _is_gemmi_structure(thing)
+
+    def _read_next_timestep(self, ts=None):
+        return self._read_frame(self.ts.frame + 1)
+
+    def _read_frame(self, frame):
+        if not 0 <= frame < self.n_frames:
+            raise IOError(
+                f"Invalid frame {frame} for trajectory with length {self.n_frames}"
+            )
+        self.ts.frame = frame
+        self.ts.positions = self._positions[frame]
+        if self.convert_units:
+            self.convert_pos_from_native(self.ts._pos)
+        self.ts.dimensions = self._dimensions
+        return self.ts
+
+    def _reopen(self):
+        self.ts.frame = -1

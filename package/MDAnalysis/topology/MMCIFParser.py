@@ -45,17 +45,16 @@ Classes
 
 """
 
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from gemmi import Structure
-
 import logging
 import warnings
 
 import numpy as np
 
-from ..coordinates.MMCIF import HAS_GEMMI, _read_gemmi_structure
+from ..coordinates.MMCIF import (
+    HAS_GEMMI,
+    _is_gemmi_structure,
+    _parse_mmcif,
+)
 from ..core.topology import Topology
 from ..guesser.tables import SYMB2Z
 from ..core.topologyattrs import (
@@ -104,7 +103,7 @@ class MMCIFParser(TopologyReaderBase):
     the `gemmi library <https://gemmi.readthedocs.io>`_.
 
     The *filename* argument accepts a file path, a compressed ``.cif.gz`` file,
-    or a stream/file-like object.
+    a stream/file-like object, or a ``gemmi.Structure``.
 
     Creates the following Attributes (if present):
         - :class:`MDAnalysis.core.topologyattrs.AtomAttr` subclasses:
@@ -139,6 +138,11 @@ class MMCIFParser(TopologyReaderBase):
             raise ImportError(errmsg)
         super(MMCIFParser, self).__init__(filename)
 
+    @staticmethod
+    def _format_hint(thing):
+        """Can this Parser read *thing*?"""
+        return _is_gemmi_structure(thing)
+
     def parse(self, **kwargs) -> Topology:
         """Read the file and return the structure.
 
@@ -146,25 +150,23 @@ class MMCIFParser(TopologyReaderBase):
         -------
         MDAnalysis Topology object
         """
-        structure = self._get_structure()
+        parsed = _parse_mmcif(self.filename)
 
-        if len(structure) > 1:
+        if parsed.n_models > 1 and not parsed.same_size:
             wmsg = (
-                f"MMCIF model {self.filename} contains {len(structure)} different models, "
+                f"MMCIF model {self.filename} contains {parsed.n_models} different models, "
                 "but only the first one will be used to assign the topology"
             )
             warnings.warn(wmsg)
             logger.warning(wmsg)
-            del structure[1:]
 
-        import gemmi
-
-        flat = gemmi.FlatStructure(structure)
-        flat.strings_as_numbers = False
+        def column(name):
+            # the first model's atoms come first in the flat table
+            return np.asarray(getattr(parsed.flat, name))[: parsed.n_atoms]
 
         # String columns are factorized in bulk into (per-atom index, distinct
         # values) pairs, the layout MDAnalysis interns strings in anyway
-        het_idx, het_flags = _factorize(np.asarray(flat.het_flags).view("S1"))
+        het_idx, het_flags = _factorize(column("het_flags").view("S1"))
         # Intentionally strict: this also rejects the "\0" (unspecified)
         # het_flag, so an mmCIF lacking the ``group_PDB`` field will fail
         # to parse.
@@ -173,14 +175,14 @@ class MMCIFParser(TopologyReaderBase):
         record_types = np.where(het_flags == "A", "ATOM", "HETATM")
 
         # gemmi stores "no altloc" as "\0", which numpy decodes to ""
-        altlocs = _factorize(np.asarray(flat.altlocs).view("S1"))
-        names = _factorize(np.asarray(flat.atom_names))
-        chain_idx, chainids = _factorize(np.asarray(flat.chain_ids))
-        elem_idx, elements = _factorize(np.asarray(flat.element_names))
-        resname_idx, resnames = _factorize(np.asarray(flat.residue_names))
-        icode_idx, icodes = _factorize(np.asarray(flat.icodes).view("S1"))
+        altlocs = _factorize(column("altlocs").view("S1"))
+        names = _factorize(column("atom_names"))
+        chain_idx, chainids = _factorize(column("chain_ids"))
+        elem_idx, elements = _factorize(column("element_names"))
+        resname_idx, resnames = _factorize(column("residue_names"))
+        icode_idx, icodes = _factorize(column("icodes").view("S1"))
         icode_idx, icodes = _dedupe(icode_idx, [c.strip() for c in icodes])
-        resids = np.asarray(flat.resnums)
+        resids = column("resnums")
 
         # As in PDBParser: feed atomtypes the raw element column, but
         # validate elements against known symbols before storing them
@@ -202,18 +204,18 @@ class MMCIFParser(TopologyReaderBase):
         # Atom Attributes
         attrs = [
             AltLocs._from_lookup(*altlocs),
-            Atomids(np.asarray(flat.serials)),
+            Atomids(column("serials")),
             Atomnames._from_lookup(*names),
             Atomtypes._from_lookup(elem_idx, elements),
             # ----------------------------
             ChainIDs._from_lookup(chain_idx, chainids),
             Elements._from_lookup(*_dedupe(elem_idx, validated_elements)),
-            FormalCharges(np.asarray(flat.charge)),
-            Masses(np.asarray(flat.element_weights)),
+            FormalCharges(column("charge")),
+            Masses(column("element_weights")),
             # ----------------------------
-            Occupancies(np.asarray(flat.occ)),
+            Occupancies(column("occ")),
             RecordTypes._from_lookup(het_idx, record_types),
-            Tempfactors(np.asarray(flat.b_iso)),
+            Tempfactors(column("b_iso")),
         ]
         n_atoms = len(resids)
 
@@ -241,6 +243,3 @@ class MMCIFParser(TopologyReaderBase):
             atom_resindex=residx,
             residue_segindex=segidx,
         )
-
-    def _get_structure(self) -> "Structure":
-        return _read_gemmi_structure(self.filename)

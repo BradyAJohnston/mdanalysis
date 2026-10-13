@@ -51,6 +51,7 @@ from ..lib import util
 from ..lib.util import asiterable, store_init_arguments
 from . import base
 from . import core
+from .MMCIF import _is_gemmi_structure
 
 
 def multi_level_argsort(l):
@@ -428,6 +429,8 @@ class ChainReader(base.ReaderBase):
             not isinstance(thing, np.ndarray)
             and util.iterable(thing)
             and not util.isstream(thing)
+            # a gemmi.Structure iterates over its models but is one input
+            and not _is_gemmi_structure(thing)
         )
 
     def _get_local_frame(self, k) -> Tuple[int, int]:
