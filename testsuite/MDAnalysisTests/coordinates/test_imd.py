@@ -239,7 +239,7 @@ class TestIMDReaderBaseAPI(MultiframeReaderTest):
 
     @staticmethod
     @pytest.fixture()
-    def transformed(ref):
+    def transformed(ref) -> mda.Universe:
         # This will start the test IMD Server, waiting for a connection
         # to then send handshake & first frame
         ref.server.handshake_sequence("localhost")
@@ -375,6 +375,10 @@ class TestIMDReaderBaseAPI(MultiframeReaderTest):
     def test_transformations_copy(self, ref, transformed):
         with pytest.raises(RuntimeError, match="does not support copying"):
             transformed.copy()
+
+    def test_transformations_copy_without(self, ref, transformed):
+        with pytest.raises(RuntimeError, match="does not support copying"):
+            transformed.copy(transformations=False)
 
     def test_timeseries_empty_asel(self, reader):
         pytest.skip("IMDReader does not support timeseries")

@@ -576,6 +576,34 @@ class BaseReaderTest(object):
                 ts.positions, ideal_coords, atol=10 ** (-ref.prec), rtol=0
             )
 
+    def test_transformations_copy_without(self, ref, transformed):
+        # a copy without transformations has untransformed coordinates,
+        # also for the frame the original was on when copied
+        transformed[ref.n_frames - 1]
+        new = transformed.copy(transformations=False)
+        assert not new.transformations
+        assert_allclose(
+            new.ts.positions,
+            ref.iter_ts(ref.n_frames - 1).positions,
+            atol=10 ** (-ref.prec),
+            rtol=0,
+        )
+        for i, ts in enumerate(new):
+            assert_allclose(
+                ts.positions,
+                ref.iter_ts(i).positions,
+                atol=10 ** (-ref.prec),
+                rtol=0,
+            )
+        # and new transformations can be added
+        new.add_transformations(translate([1, 1, 1]))
+        assert_allclose(
+            new[0].positions,
+            ref.iter_ts(0).positions + np.float32((1, 1, 1)),
+            atol=10 ** (-ref.prec),
+            rtol=0,
+        )
+
     def test_add_another_transformations_raises_ValueError(self, transformed):
         # After defining the transformations, the workflow cannot be changed
         with pytest.raises(ValueError):

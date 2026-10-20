@@ -445,6 +445,38 @@ class TestTransformations(object):
         ref = translate([10, 10, 10])(uref.trajectory.ts)
         assert_almost_equal(u.trajectory.ts.positions, ref, decimal=6)
 
+    def test_copy_keeps_transformations(self):
+        u = mda.Universe(PSF, DCD, transformations=translate([10, 10, 10]))
+        uref = mda.Universe(PSF, DCD)
+        u_copy = u.copy()
+        assert len(u_copy.trajectory.transformations) == 1
+        ref = translate([10, 10, 10])(uref.trajectory.ts)
+        assert_almost_equal(u_copy.trajectory.ts.positions, ref, decimal=6)
+
+    def test_copy_without_transformations(self):
+        u = mda.Universe(PSF, DCD, transformations=translate([10, 10, 10]))
+        uref = mda.Universe(PSF, DCD)
+        u.trajectory[5]
+        u_copy = u.copy(transformations=False)
+        assert not u_copy.trajectory.transformations
+        assert u_copy.trajectory.ts.frame == 5
+        assert_almost_equal(
+            u_copy.atoms.positions, uref.trajectory[5].positions, decimal=6
+        )
+        # the original keeps its transformations
+        assert len(u.trajectory.transformations) == 1
+        # new transformations can be added to the copy
+        u_copy.trajectory.add_transformations(translate([0, 0, 10]))
+        ref = translate([0, 0, 10])(uref.trajectory[5])
+        assert_almost_equal(u_copy.atoms.positions, ref, decimal=6)
+
+    def test_copy_without_transformations_in_memory_raises(self):
+        u = mda.Universe(
+            PSF, DCD, in_memory=True, transformations=translate([10, 10, 10])
+        )
+        with pytest.raises(ValueError, match="without its transformations"):
+            u.copy(transformations=False)
+
 
 class TestGuessTopologyAttrs(object):
     def test_automatic_type_and_mass_guessing(self):

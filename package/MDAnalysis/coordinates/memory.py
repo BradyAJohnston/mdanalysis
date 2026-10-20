@@ -447,8 +447,30 @@ class MemoryReader(base.ProtoReader):
         # assume filename is a numpy array
         return filename.shape[order.find("a")]
 
-    def copy(self):
-        """Return a copy of this Memory Reader"""
+    def copy(self, transformations: bool = True):
+        """Return a copy of this Memory Reader
+
+        Parameters
+        ----------
+        transformations : bool, default ``True``
+            Must be ``True`` if transformations were added: they are applied
+            to the coordinate array in memory and cannot be removed.
+
+        Raises
+        ------
+        ValueError
+            If `transformations` is ``False`` and the Reader has
+            transformations.
+
+
+        .. versionchanged:: 2.11.0
+           Added the `transformations` keyword.
+        """
+        if not transformations and self.transformations:
+            raise ValueError(
+                "Cannot copy a MemoryReader without its transformations: "
+                "they have already been applied to the coordinates in memory."
+            )
         vels = (
             self.velocity_array.copy()
             if self.velocity_array is not None

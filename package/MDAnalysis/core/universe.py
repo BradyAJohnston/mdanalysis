@@ -652,13 +652,36 @@ class Universe(object):
             context, to_guess, force_guess, error_if_missing=False
         )
 
-    def copy(self):
-        """Return an independent copy of this Universe"""
+    def copy(self, transformations: bool = True):
+        """Return an independent copy of this Universe
+
+        Parameters
+        ----------
+        transformations : bool, default ``True``
+            If ``False``, the trajectory of the copy has none of the
+            transformations of this Universe, so that new transformations
+            can be added to it with
+            :meth:`~MDAnalysis.coordinates.base.ProtoReader.add_transformations`.
+
+        Raises
+        ------
+        ValueError
+            If `transformations` is ``False`` and the trajectory is an
+            in-memory trajectory with transformations, because these have
+            already been applied to the coordinates.
+
+
+        .. versionchanged:: 2.11.0
+           Added the `transformations` keyword.
+        """
         context = self._context.copy()
         new = self.__class__(
             self._topology.copy(), to_guess=(), context=context
         )
-        new.trajectory = self.trajectory.copy()
+        if transformations:
+            new.trajectory = self.trajectory.copy()
+        else:
+            new.trajectory = self.trajectory.copy(transformations=False)
         return new
 
     @classmethod

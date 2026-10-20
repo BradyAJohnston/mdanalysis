@@ -113,6 +113,15 @@ class TestMemoryReader(MultiframeReaderTest):
             universe2.trajectory.get_array().shape,
         )
 
+    def test_transformations_copy_without(self, ref, transformed):
+        # transformations are applied to the array and cannot be removed
+        with pytest.raises(ValueError, match="without its transformations"):
+            transformed.copy(transformations=False)
+
+    def test_copy_without_transformations_untransformed(self, reader):
+        new = reader.copy(transformations=False)
+        assert_equal(new.get_array(), reader.get_array())
+
     def test_iteration(self, ref, reader):
         frames = 0
         for i, frame in enumerate(reader):
